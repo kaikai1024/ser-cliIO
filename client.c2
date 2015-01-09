@@ -1,0 +1,210 @@
+
+#include<stdio.h> 			/* perror */
+#include<stdlib.h>			/* exit	*/
+#include<sys/types.h>		/* WNOHANG */
+#include<sys/wait.h>		/* waitpid */
+#include<string.h>			/* memset */
+#include "dbtime.h"
+#include "socketwrapper.h" 	/* socket layer wrapper */
+
+#define	true		1
+#define false		0
+
+#define PORT 		3490 	/* Server的端口 */
+#define MAXDATASIZE 100 	/*一次可以读的最大字节数 */
+//
+struct baohead			//包头格式
+{
+int size;
+int id;
+int recvsize;
+};
+typedef baohead ElemType;
+struct sendbuf		//数据包格式
+{
+ElemType head;		//包头
+char buf[1024];		//存放数据的变量
+int bufSize;		//存放本包存放数据的buf变量的长度的变量。
+};
+struct sendbuf data;
+//
+void* sendfunc(void* p);		//发送线程
+void* recvfunc(void* p);		//街收线程
+//
+int sendexit=0;		//控制发送线程状态的全局变量
+int recvexit=0;		//控制接收线程状态的全局变量
+int filesize=0;		//记录文件大小的全局变量
+int recvsize=0;		//返回已接收文件大小的全局变量
+int Sendid=0;		//发送ID
+int ReceiveId =0;	//接收ID
+char *name = NULL;
+//
+int sockfd, numbytes;
+char buf[MAXDATASIZE];
+//
+int main(int argc, char *argv[])
+{
+
+	struct hostent *he; /* 主机信息 */
+	struct sockaddr_in their_addr; /* 对方地址信息 */
+	//
+	pthread_t tid,tid2;
+	pthread_attr_t attr,attr2;
+	//
+	if (argc != 2) 
+	{
+		fprintf(stderr,"usage: client hostname\n");
+		exit(1);
+	}
+	
+	/* get the host info */
+	if ((he=Gethostbyname(argv[1])) == NULL) 
+	{
+		/* 注意：获取DNS信息时，显示出错需要用herror而不是perror */
+		/* herror 在新的版本中会出现警告，已经建议不要使用了 */
+		perror("gethostbyname");
+		exit(1);
+	}
+	
+	if ((sockfd=Socket(AF_INET,SOCK_DGRAM,0))==-1) 
+	{
+		perror("socket");
+		exit(1);
+	}
+	
+	their_addr.sin_family = AF_INET;
+	their_addr.sin_port = Htons(PORT); /* short, NBO */
+	their_addr.sin_addr = *((struct in_addr *)he->h_addr_list[0]);
+	memset(&(their_addr.sin_zero),0, 8); /* 其余部分设成0 */
+	printf("into the file path of sending :\n");
+	scanf("%s",&name);
+
+
+	//创建发送线程
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	if (pthread_create(&tid, &attr, sendfunc, NULL) != 0) 
+	{
+		fprintf(stderr, "pthread_create failed\n");
+		return -1;
+	}
+	//创建接收线程
+	pthread_attr_init(&attr2);
+	pthread_attr_setdetachstate(&attr2, PTHREAD_CREATE_DETACHED);
+	if (pthread_create(&tid2, &attr2, recvfunc, NULL) != 0) 
+	{
+		fprintf(stderr, "pthread_create failed\n");
+		return -1;
+	}
+	//
+	while(recvexit<2 ||sendexit<2 )//如果发送和接收线程未全部退出，则主线程等待。
+	{
+		Sleep(100);
+	}
+	printf("退出成功!\n");
+	return 0;
+
+	/*	
+	dbtime_startTest ("Sleep 5s");
+    	sleep(5);
+	dbtime_endAndShow ();
+	dbtime_finalize ();
+	return true;
+		*/
+
+}
+void* sendfunc(void* p)
+{
+	sendexit=1;//告诉主线程，发送线程已经创建完毕
+	static int filepos=0;//记录文件偏移量的变量
+	int fp1;
+	fp1 = fopen( name, "rb" );	//打开要发送的文件
+	fseek(fp1,0,SEEK_END);		//将文件指针移动到文件尾部
+	filesize=ftell(fp1);		//得到文件长度
+	// printf("filesize=%d\n",filesize);
+	rewind(fp1);//将文件指针重新指到头部
+
+	Sendto(sockfd, name, 100, 0,(sockaddr *)&their_addr,&(sizaof(sockadddr)));
+	Sendto(sockfd, &filesize, 100, 0,(sockaddr *)&their_addr,&(sizaof(sockadddr)));
+
+	while( sendexit==1 )
+	{
+
+		if(ReceiveId == Sendid) //确认包头内的ID是所期望的。
+		{
+			Sendid++;
+			fseek(fp1,filepos,SEEK_SET);//根据偏移量移动文件指针
+			int readsize=fread(data.buf,sizeof(char),1024,fp1);//读取下段文件
+			filepos = ftell(fp1);
+			data.head.size=filesize;//将文件大小放进包头
+			data.head.id=Sendid;//发送ID放进包头（标志包顺序）
+			data.bufSize = readsize;//记录数据段长度的变量
+			// printf("id=%d\n",Sendid);
+			// printf("sendsize=%d\n",data.bufSize);
+			// printf("filesize=%d\n",data.head.size);
+			int d=sendto(sock,(char*)(&data),sizeof(data),0,(sockaddr *)&server,len);//发送数据报
+			if(d>0)//成功发送
+			{
+				// printf("发送数据%s\n",(char*)(&data));
+			}
+		}
+		/*
+		int dRet;//发送完后，等待500毫秒。等待中如果等待的事件被激活，则马上返回。
+		switch(dRet)
+		{
+			case WAIT_TIMEOUT://一段时间内没收到确认包，重发刚才的那个数据报
+			sendto(sock,(char*)(&data),sizeof(data),0,(sockaddr *)&server,len);
+			// printf("重新发送数据%s\n",(char*)(&data));
+			break;
+			default:break;//否则返回。
+		}
+			*/
+	}
+	fclose(fp1);
+	sendexit=2;
+	return 0;
+}
+
+void * recvfunc(void * p)
+{
+	recvexit=1;//告诉主线程，接收线程已经启动。
+	baohead recvbao;
+	FD_SET fdread;
+
+	while( recvexit==1 )
+	{
+		FD_ZERO(&fdread);
+		FD_SET(sock,&fdread);
+		timeval val;
+		val.tv_sec=60;
+		val.tv_usec=0;
+		int Result=select(0,&fdread,0,0,&val);//查看socket是否可读
+		if(Result==SOCKET_ERROR)
+		{
+			break;
+		}
+		if(Result==0)//不可读则马上返回。重新判断
+		{
+			continue;
+		}
+
+		int rec = recvfrom(sock, (char *)(&recvbao), 2048, 0,(sockaddr *)&server,&len);//可读状态下接收数据报
+		if( rec > 0 )
+		{
+
+			// printf("收到确认信息 %s\n" , (char*)(&recvbao));
+			recvsize=recvbao.recvsize;//将接收大小传给全局变量
+			ReceiveId = recvbao.id;//记录此次接收到包的ID
+			//SetEvent(hEvent);//激活事件
+			if(recvbao.recvsize==-1)//如果接收端发送接收完毕的信号，则发送，接收线程均自行退出，并显示发送文件完成
+			{
+				sendexit=2;
+				recvexit=2;
+				printf("文件发送完成!\n");
+				break;
+			}
+		}
+	}
+	recvexit=2;
+	return 0;
+}
