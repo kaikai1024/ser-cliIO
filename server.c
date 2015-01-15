@@ -14,6 +14,7 @@
 #include<netdb.h>
 #include<stdarg.h>
 #include<string.h>
+#include "MD5.h"
 
 #define SERVER_PORT 8000
 #define BUFFER_SIZE 1024
@@ -37,7 +38,9 @@ struct SendPack
 int main()
 {
 	int id = 1;
-
+	char file_name[FILE_NAME_MAX_SIZE+1];
+	char buffer[BUFFER_SIZE];
+	char md5_sum[MD5_LEN + 1];
 	/* 创建UDP套接口 */
 	struct sockaddr_in server_addr;
 	bzero(&server_addr, sizeof(server_addr));
@@ -68,7 +71,7 @@ int main()
 		socklen_t client_addr_length = sizeof(client_addr);
 
 		/* 接收数据 */
-		char buffer[BUFFER_SIZE];
+
 		bzero(buffer, BUFFER_SIZE);
 		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr, &client_addr_length) == -1)
 		{
@@ -77,7 +80,7 @@ int main()
 		}
 
 		/* 从buffer中拷贝出file_name */
-		char file_name[FILE_NAME_MAX_SIZE+1];
+
 		bzero(file_name,FILE_NAME_MAX_SIZE+1);
 		strncpy(file_name, buffer, strlen(buffer)>FILE_NAME_MAX_SIZE?FILE_NAME_MAX_SIZE:strlen(buffer));
 		printf("%s\n", file_name);
@@ -90,13 +93,12 @@ int main()
 		}
 
 		/* 从client接收数据，并写入文件 */
-		int len = 0;
 		while(1)
 		{
 			PackInfo pack_info;
 
-			if((len = recvfrom(server_socket_fd, (char*)&data, sizeof(data), 0, 
-					(struct sockaddr*)&client_addr,&client_addr_length)) > 0)
+			if(recvfrom(server_socket_fd, (char*)&data, sizeof(data), 0, 
+					(struct sockaddr*)&client_addr,&client_addr_length) > 0)
 			{
 				if(data.head.id == id)
 				{
@@ -136,8 +138,45 @@ int main()
 		}
 		/* 关闭文件 */
 		fclose(fp);
-		//printf("Receive File:\t%s From client IP Successful!\n", file_name);
-		
+		/* 接收client端的文件md5值 */
+		bzero(buffer, BUFFER_SIZE);
+		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr, &client_addr_length) == -1)
+		{
+			perror("Receive md5 Data Failed:");
+			exit(1);
+		}
+		/* 从buffer中拷贝出md5 */
+		bzero(md5_sum,MD5_LEN+1);
+		strncpy(md5_sum, buffer, strlen(buffer)>MD5_LEN?MD5_LEN:strlen(buffer));
+		printf("the client md5 :%s\n", md5_sum);
+		/* 计算server端的md5 */
+		bzero(md5_sum,MD5_LEN+1);
+                if(!CalcFileMD5(file_name, md5_sum))
+       		{
+       			puts("Error occured!");
+      			return NULL;
+  		}
+  		printf("the server MD5 sum is :%s \n", md5_sum);
+		/* 验证文件的正确性 */
+		if(strcmp(buffer,md5_sum) == 0)
+       		{
+          		printf("*******the file has been modified*********\n"); 
+			printf("**File:%s Transfer Successful!**\n", file_name);
+          		break;
+       		}
+ 		else
+		{
+			printf("**File:%s Transfer Wrong!**\n", file_name);
+		}
+		/* 发送server端的文件md5值 */
+		bzero(buffer, BUFFER_SIZE);
+		strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));
+		if(sendto(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr,client_addr_length) < 0)
+		{
+			perror("Send server‘s md5_sum Failed:");
+			exit(1);
+		}
+			
 	}		
 	close(server_socket_fd);
 	return 0;
