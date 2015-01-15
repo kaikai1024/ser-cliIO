@@ -14,6 +14,7 @@
 #include<netdb.h>
 #include<stdarg.h>
 #include<string.h>
+#include<time.h>
 
 #define SERVER_PORT 8000
 #define BUFFER_SIZE 1024
@@ -85,6 +86,9 @@ int main()
 	else
 	{
 		int len = 0;
+		/* time start */
+		time_t t_start,t_end;
+    		t_start=time(NULL);
 		/* 每读取一段数据，便将其发给server */
 		while(1)
 		{
@@ -124,6 +128,9 @@ int main()
 				receive_id = pack_info.id;	
 			}
 		}
+		/* time end */
+    		t_end=time(NULL);
+    		printf("共用时%.0fs\n",difftime(t_end,t_start));
 		/* 关闭文件 */
 		fclose(fp);
 		printf("File:%s Transfer Successful!\n", file_name);
