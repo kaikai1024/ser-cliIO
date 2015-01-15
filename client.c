@@ -15,6 +15,7 @@
 #include<stdarg.h>
 #include<string.h>
 #include<time.h>
+#include "MD5.h"
 
 #define SERVER_PORT 8000
 #define BUFFER_SIZE 1024
@@ -37,10 +38,13 @@ struct RecvPack
 
 int main()
 {
-	//int id = 1;
+	char file_name[FILE_NAME_MAX_SIZE+1];
+	char buffer[BUFFER_SIZE];
+	char md5_sum[MD5_LEN + 1];
+	/* 记录文件大小的全局变量 */
+	int filesize = 0;		
 	/* 发送id */
 	int send_id = 0;
-
 	/* 接收id */
 	int receive_id = 0;
 	/* 服务端地址 */
@@ -60,12 +64,12 @@ int main()
 	}
 
 	/* 输入文件名到缓冲区 */
-	char file_name[FILE_NAME_MAX_SIZE+1];
+	
 	bzero(file_name, FILE_NAME_MAX_SIZE+1);
 	printf("Please Input File Name to Server: ");
 	scanf("%s", file_name);
 
-	char buffer[BUFFER_SIZE];
+	
 	bzero(buffer, BUFFER_SIZE);
 	strncpy(buffer, file_name, strlen(file_name)>BUFFER_SIZE?BUFFER_SIZE:strlen(file_name));
 
@@ -75,10 +79,22 @@ int main()
 		perror("Send File Name Failed:");
 		exit(1);
 	}
+	/* 计算文件的md5 */
 
+       	if(!CalcFileMD5(FILENAME, md5_sum))
+      	{
+       		puts("Error occured!");
+       		break;
+      	}
+       
 	/* 打开文件 */
 	//FILE *fp = fopen(file_name, "r");
 	FILE *fp = fopen("/home/kkf/1G.img", "r");
+	fseek(fp,0,SEEK_END);		/*将文件指针移动到文件尾部*/
+	filesize=ftell(fp);		/*得到文件长度*/
+	printf("filesize=%d\n",filesize);
+	rewind(fp); 			/*将文件指针重新指到头部*/
+
 	if(NULL == fp)
 	{
 		printf("File:%s Not Found.\n", file_name);
@@ -133,7 +149,38 @@ int main()
     		printf("共用时%.0fs\n",difftime(t_end,t_start));
 		/* 关闭文件 */
 		fclose(fp);
-		printf("File:%s Transfer Successful!\n", file_name);
+		/* 发送计算好的md5 */
+		bzero(buffer, BUFFER_SIZE);
+		strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));	
+		if(sendto(client_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&server_addr,server_addr_length) < 0)
+		{
+			perror("Send File Name Failed:");
+			exit(1);
+		}
+		/* 接收server端的md5 */
+		bzero(buffer, BUFFER_SIZE);
+		if(recvfrom(client_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&server_addr, &server_addr_length) == -1)
+		{
+			perror("Receive md5 Data Failed:");
+			exit(1);
+		}
+		/* 验证md5 */
+		if(read(client_socket_fd,buffer,1023) > 0)
+		{
+			printf("buffer: %s\n", buffer);
+		}
+       		
+       		if(strcmp(buffer,md5_sum) == 0)
+       		{
+          		printf("*******the file has been modified*********\n"); 
+			printf("**File:%s Transfer Successful!**\n", file_name);
+          		break;
+       		}
+ 		else
+		{
+			printf("**File:%s Transfer Wrong!**\n", file_name);
+		}
+				
 	}
 
 	close(client_socket_fd);
