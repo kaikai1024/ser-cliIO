@@ -1,177 +1,144 @@
+/*************************************************************************
+    > File Name: server.c
+    > Author: kkFeng
+    > Created Time: 2015年01月11日 
+ ************************************************************************/
+#include<sys/types.h>
+#include<sys/socket.h>
+#include<unistd.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include<stdio.h>
+#include<stdlib.h>
+#include<errno.h>
+#include<netdb.h>
+#include<stdarg.h>
+#include<string.h>
 
-#include<stdio.h> 			/* perror */
-#include<stdlib.h>			/* exit	*/
-#include<sys/types.h>		/* WNOHANG */
-#include<sys/wait.h>		/* waitpid */
-#include<string.h>			/* memset */
-//
-#include <sys/time.h>
-#include <pthread.h>
-//
-#include "socketwrapper.h" 	/* socket layer wrapper */
+#define SERVER_PORT 8000
+#define BUFFER_SIZE 1024
+#define FILE_NAME_MAX_SIZE 512
 
-#define	true		1
-#define false		0
-
-#define MYPORT 		3490                /* 监听的端口 */ 
-#define BACKLOG 	10                 	/* listen的请求接收队列长度 */
-//
-int sendexit=0;		//控制发送线程状态的全局变量
-int recvexit=0;		//控制接收程状态的全局变量
-int filesize=1;		//记录文件大小的全局变量
-int recvsize=0;		//记录接收文件大小的全局变量
-int id=1;
-
-int sockfd;            /* 监听端口，数据端口 */
-char * name = NULL;	//记录文件名
-
-struct baohead		//包头
+/* 包头 */
+typedef struct
 {
-int size;
-int id;
-int recvsize;
-};
-//typedef baohead ElemType;
-struct baohead datahead;
-struct recvbuf		//包格式
+	int id;
+	int buf_size;
+}PackInfo;
+
+/* 接收包 */
+struct SendPack
 {
-//ElemType head;		//包头
-struct baohead head;
-char buf[1024];		//存放数据的变量
-int bufSize;		//存放数据长度的变量
+	PackInfo head;
+	char buf[BUFFER_SIZE];
+} data;
 
-};
-struct recvbuf data;
 
-void* recvfunc(void* p);		//接收线程
-//
-int theiraddr_len ;
-struct sockaddr_in sa;         /* 自身的地址信息 */ 
-struct sockaddr_in their_addr; /* 连接对方的地址信息 */ 
-
-int main() 
+int main()
 {
+	int id = 1;
 
-	//
-	pthread_t tid;
-	pthread_attr_t attr;
-	//
-	if ((sockfd = Socket(AF_INET, SOCK_DGRAM, 0)) == -1) 
+	/* 创建UDP套接口 */
+	struct sockaddr_in server_addr;
+	bzero(&server_addr, sizeof(server_addr));
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	server_addr.sin_port = htons(SERVER_PORT);
+
+	/* 创建socket */
+	int server_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if(server_socket_fd == -1)
 	{
-		perror("socket"); 
-		exit(1); 
-	}
-	//setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const void*) &opt, sizeof(opt));
-
-	sa.sin_family = AF_INET;
-	sa.sin_port = Htons(MYPORT);         /* 网络字节顺序 */
-	sa.sin_addr.s_addr = INADDR_ANY;     /* 自动填本机IP */
-	memset(&(sa.sin_zero),0, 8);            /* 其余部分置0 */
-	theiraddr_len = sizeof(their_addr);
-
-	if ( Bind(sockfd, (struct sockaddr *)&sa, sizeof(sa)) == -1) 
-	{
-		perror("bind");
+		perror("Create Socket Failed:");
 		exit(1);
 	}
-	recvfrom(sockfd, name, 100, 0,(struct sockaddr *)&their_addr,&theiraddr_len);
-	recvfrom(sockfd, &filesize, 100, 0,(struct sockaddr *)&their_addr,&theiraddr_len);
-	printf("receive the file :%s,with the size :%d",name,filesize);
-       	//r = fcntl(sockfd, F_GETFL, 0);
-       	//fcntl(sockfd, F_SETFL, r & ~O_NONBLOCK);
 
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	if (pthread_create(&tid, &attr, recvfunc, NULL) != 0) 
+	/* 绑定套接口 */
+	if(-1 == (bind(server_socket_fd,(struct sockaddr*)&server_addr,sizeof(server_addr))))
 	{
-		fprintf(stderr, "pthread_create failed\n");
-		return -1;
+		perror("Server Bind Failed:");
+		exit(1);
 	}
-	while(recvexit<2)//如果接收线程未退出，则主线程睡一段时间。
-	{
-		//Sleep(100);
-	}
-	printf("退出成功!\n");
-	return 0;
-}
-void* recvfunc(void* p)
-{
-	recvexit=1;	//告诉主线程，接收线程已经创建成功。
-	FILE * fp;
-	fp=fopen("/home/kkf/recv.img", "wb");//如果原文件存在，则将原来文件删除。并新建一个空文件
-	fclose(fp);
-	fp=fopen("/home/kkf/recv.img", "ab");//打开那个空文件。
-	fd_set fdread;//建立集合
-	while( recvexit==1 )
-	{
-		FD_ZERO(&fdread);//清空集合
-		FD_SET(sockfd,&fdread);//将socket放进集合内
-		struct timeval val;//设置超时时间
-		int Result=select(0,&fdread,0,0,&val);//检查sokcet的可读性
-		if(Result==-1)//错误则退出线程
+
+	/* 数据传输 */
+	while(1)
+	{	
+		/* 定义一个地址，用于捕获客户端地址 */
+		struct sockaddr_in client_addr;
+		socklen_t client_addr_length = sizeof(client_addr);
+
+		/* 接收数据 */
+		char buffer[BUFFER_SIZE];
+		bzero(buffer, BUFFER_SIZE);
+		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr, &client_addr_length) == -1)
 		{
-			printf("select error %s\n",strerror(errno));
-                        exit(-1);
+			perror("Receive Data Failed:");
+			exit(1);
 		}
-		else if(Result==0)//没数据到则马上返回。
+
+		/* 从buffer中拷贝出file_name */
+		char file_name[FILE_NAME_MAX_SIZE+1];
+		bzero(file_name,FILE_NAME_MAX_SIZE+1);
+		strncpy(file_name, buffer, strlen(buffer)>FILE_NAME_MAX_SIZE?FILE_NAME_MAX_SIZE:strlen(buffer));
+		printf("%s\n", file_name);
+		/* 打开文件，准备写入 */
+		FILE *fp = fopen(file_name, "w");
+		if(NULL == fp)
 		{
-			printf("select timeout,continue circle\n");
-			continue;
+			printf("File:\t%s Can Not Open To Write\n", file_name); 
+			exit(1);
 		}
-	
-		int rec = recvfrom(sockfd, (char *)(&data), 2048, 0,(struct sockaddr *)&their_addr,&theiraddr_len);//读取到来的数据报
-		if( rec > 0 )
+
+		/* 从client接收数据，并写入文件 */
+		int len = 0;
+		while(1)
 		{
-			if(data.head.id == id)//包ID是所期望的,则读入数据
+			PackInfo pack_info;
+
+			if((len = recvfrom(server_socket_fd, (char*)&data, sizeof(data), 0, 
+					(struct sockaddr*)&client_addr,&client_addr_length)) > 0)
 			{
-				// printf("id=%d\n",data.head.id);
-				// printf("bufsize=%d\n",data.bufSize);
-				fwrite( data.buf, sizeof(char), data.bufSize, fp);
-				recvsize=recvsize+data.bufSize;//记录新的接收到的文件长度
-				// printf("recvsize=%d\n",recvsize);
-				filesize=data.head.size;
-				datahead.id= data.head.id;
-				datahead.recvsize=recvsize;
-				datahead.size=filesize;
-				//发送收到数据的确认包
-				int d=sendto(sockfd,(char*)(&datahead),sizeof(datahead),0,(struct sockaddr *)&their_addr,sizeof(their_addr));
-				if(d>0)
+				if(data.head.id == id)
 				{
-					// printf("发送收到数据包的确认信息成功!\n");
+					pack_info.id = data.head.id;
+					pack_info.buf_size = data.head.buf_size;
+					++id;
+					/* 发送数据包确认信息 */
+					if(sendto(server_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, 
+						(struct sockaddr*)&client_addr, client_addr_length) < 0)
+					{
+						printf("Send confirm information failed!");
+					}
+					/* 写入文件 */
+					if(fwrite(data.buf, sizeof(char), data.head.buf_size, fp) < data.head.buf_size)
+					{
+						printf("File:\t%s Write Failed\n", file_name);
+						break;
+					}
 				}
-				id=id+1;
+				else if(data.head.id < id)  /* 如果是重发的包 */
+				{
+					pack_info.id = data.head.id;
+					pack_info.buf_size = data.head.buf_size;
+					/* 重发数据包确认信息 */
+					if(sendto(server_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, 
+						(struct sockaddr*)&client_addr, client_addr_length) < 0)
+					{
+						printf("Send confirm information failed!");
+					}
+				}
+
 			}
-		}
-		else if(data.head.id < id)//如果是已经接收过的包的重发包，则丢弃，并重发一次确认包告诉发送端该包已收。
-		{
-			datahead.id = data.head.id;
-			datahead.recvsize=recvsize;
-			datahead.size=filesize;
-			
-			int d=sendto(sockfd,(char*)(&datahead),sizeof(datahead),0,(struct sockaddr *)&their_addr,sizeof(their_addr));
-			if(d>0)
+			else
 			{
-				// printf("发送收到数据包的确认信息成功!\n");
+				break;
 			}
-		
-		
 		}
-	
-		if(filesize == recvsize )//如果接收到的文件长度等于文件大小，
-		{ //等发送一个确认包告诉发送端文件已接收完成，并退出自己的接收线程
-			datahead.id = data.head.id;
-			datahead.recvsize=-1;
-			datahead.size=filesize;
-			printf("filesize=%d\n",filesize);
-			printf("recvsize=%d\n",recvsize);
-			printf("文件接收完成!\n");
-			int d=sendto(sockfd,(char*)(&datahead),sizeof(datahead),0,(struct sockaddr *)&their_addr,sizeof(their_addr));
-			sendexit=2;
-			recvexit=2;
-			break;
-		}
-	}
-	fclose(fp);
-	recvexit=2;
-	return NULL;
+		/* 关闭文件 */
+		fclose(fp);
+		//printf("Receive File:\t%s From client IP Successful!\n", file_name);
+		
+	}		
+	close(server_socket_fd);
+	return 0;
 }
