@@ -21,23 +21,24 @@
 #define BUFFER_SIZE 1024
 #define FILE_NAME_MAX_SIZE 512
 
-/* 包头 */
+/*packeage head */
 typedef struct 
 {
 	int id;
 	int buf_size;
 }PackInfo;
 
-/* 接收包 */
-struct RecvPack
+/* package receive */
+struct Pack
 {
 	PackInfo head;
 	char buf[BUFFER_SIZE];
 } data;
 
-
+PackInfo file_inf;
 int main()
 {
+	/*file 信息*/
 	char file_name[FILE_NAME_MAX_SIZE+1];
 	char buffer[BUFFER_SIZE];
 	char md5_sum[MD5_LEN + 1];
@@ -63,13 +64,11 @@ int main()
 		exit(1);
 	}
 
-	/* 输入文件名到缓冲区 */
-	
+	/* 输入文件名到缓冲区 */	
 	bzero(file_name, FILE_NAME_MAX_SIZE+1);
 	printf("Please Input File Name to Server: ");
 	scanf("%s", file_name);
 
-	
 	bzero(buffer, BUFFER_SIZE);
 	strncpy(buffer, file_name, strlen(file_name)>BUFFER_SIZE?BUFFER_SIZE:strlen(file_name));
 
@@ -80,21 +79,30 @@ int main()
 		exit(1);
 	}
 	/* 计算文件的md5 */
-
-       	if(!CalcFileMD5(FILENAME, md5_sum))
+	
+       	if(!CalcFileMD5("/home/kkf/1G.img", md5_sum))
       	{
        		puts("Error occured!");
-       		break;
       	}
-       
+       	printf("******the md5 of the file %s is:\n******%s******\n",file_name,md5_sum);
 	/* 打开文件 */
 	//FILE *fp = fopen(file_name, "r");
 	FILE *fp = fopen("/home/kkf/1G.img", "r");
 	fseek(fp,0,SEEK_END);		/*将文件指针移动到文件尾部*/
 	filesize=ftell(fp);		/*得到文件长度*/
-	printf("filesize=%d\n",filesize);
+	//printf("filesize=%d\n",filesize);
 	rewind(fp); 			/*将文件指针重新指到头部*/
 
+	/*发送文件大小和最大id:file_inf*/
+	file_inf.buf_size = filesize;
+	file_inf.id = filesize/BUFFER_SIZE;
+	printf("******filesize:%d ; maxID:%d******\n",file_inf.buf_size,file_inf.id);
+	if(sendto(client_socket_fd, (char*)&file_inf, sizeof(file_inf), 0 , (struct sockaddr*)&server_addr,server_addr_length) < 0)
+	{
+		perror("Send File information Failed:");
+		exit(1);
+	}
+	/*发送文件*/
 	if(NULL == fp)
 	{
 		printf("File:%s Not Found.\n", file_name);
@@ -117,6 +125,8 @@ int main()
 				{
 					data.head.id = send_id;  /* 发送id放进包头,用于标记顺序 */
 					data.head.buf_size = len;  /* 记录数据长度 */
+					//printf("id=%d\n",send_id);
+					//printf("sendsize=%d\n",len);
 					if(sendto(client_socket_fd, (char*)&data, sizeof(data), 0, (struct sockaddr*)&server_addr, 								server_addr_length) < 0)
 					{
 						perror("Send File Failed:");
@@ -146,7 +156,7 @@ int main()
 		}
 		/* time end */
     		t_end=time(NULL);
-    		printf("共用时%.0fs\n",difftime(t_end,t_start));
+    		printf("******use time:%.0fs******\n",difftime(t_end,t_start));
 		/* 关闭文件 */
 		fclose(fp);
 		/* 发送计算好的md5 */
@@ -154,7 +164,7 @@ int main()
 		strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));	
 		if(sendto(client_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&server_addr,server_addr_length) < 0)
 		{
-			perror("Send File Name Failed:");
+			perror("******Send File Name Failed:******");
 			exit(1);
 		}
 		/* 接收server端的md5 */
@@ -164,21 +174,21 @@ int main()
 			perror("Receive md5 Data Failed:");
 			exit(1);
 		}
-		/* 验证md5 */
-		if(read(client_socket_fd,buffer,1023) > 0)
+		else
 		{
-			printf("buffer: %s\n", buffer);
+			printf("******server's md5: %s******\n", buffer);
 		}
-       		
+		
+       		/* 验证md5 */
        		if(strcmp(buffer,md5_sum) == 0)
        		{
-          		printf("*******the file has been modified*********\n"); 
-			printf("**File:%s Transfer Successful!**\n", file_name);
-          		break;
+          		printf("******the file has been modified******\n"); 
+			printf("******File:%s Transfer Successful!******\n", file_name);
+			exit(1);
        		}
  		else
 		{
-			printf("**File:%s Transfer Wrong!**\n", file_name);
+			printf("******File:%s Transfer Wrong!******\n", file_name);
 		}
 				
 	}
