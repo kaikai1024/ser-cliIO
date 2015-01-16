@@ -87,7 +87,7 @@ int main()
        	printf("******the md5 of the file %s is:\n******%s******\n",file_name,md5_sum);
 	/* 打开文件 */
 	//FILE *fp = fopen(file_name, "r");
-	FILE *fp = fopen("/home/kkf/1G.img", "r");
+	FILE *fp = fopen(file_name, "r");
 	fseek(fp,0,SEEK_END);		/*将文件指针移动到文件尾部*/
 	filesize=ftell(fp);		/*得到文件长度*/
 	//printf("filesize=%d\n",filesize);
