@@ -20,35 +20,36 @@
 #define BUFFER_SIZE 1024
 #define FILE_NAME_MAX_SIZE 512
 
-/* 包头 */
+/* package head */
 typedef struct
 {
 	int id;
 	int buf_size;
 }PackInfo;
 
-/* 接收包 */
-struct SendPack
+/* package send */
+struct Pack
 {
 	PackInfo head;
 	char buf[BUFFER_SIZE];
 } data;
-
-
+//
+PackInfo pack_info;
+PackInfo file_inf;
+//
 int main()
 {
+	int filesize = 0;
 	int id = 1;
 	char file_name[FILE_NAME_MAX_SIZE+1];
 	char buffer[BUFFER_SIZE];
 	char md5_sum[MD5_LEN + 1];
-	/* 创建UDP套接口 */
+	/* create socket  */
 	struct sockaddr_in server_addr;
 	bzero(&server_addr, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	server_addr.sin_port = htons(SERVER_PORT);
-
-	/* 创建socket */
 	int server_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if(server_socket_fd == -1)
 	{
@@ -56,49 +57,56 @@ int main()
 		exit(1);
 	}
 
-	/* 绑定套接口 */
+	/* bind */
 	if(-1 == (bind(server_socket_fd,(struct sockaddr*)&server_addr,sizeof(server_addr))))
 	{
 		perror("Server Bind Failed:");
 		exit(1);
 	}
 
-	/* 数据传输 */
+	/* translate file */
 	while(1)
 	{	
-		/* 定义一个地址，用于捕获客户端地址 */
+		
 		struct sockaddr_in client_addr;
 		socklen_t client_addr_length = sizeof(client_addr);
-
-		/* 接收数据 */
-
+		/* file_name*/
 		bzero(buffer, BUFFER_SIZE);
 		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr, &client_addr_length) == -1)
 		{
 			perror("Receive Data Failed:");
 			exit(1);
 		}
-
-		/* 从buffer中拷贝出file_name */
-
 		bzero(file_name,FILE_NAME_MAX_SIZE+1);
 		strncpy(file_name, buffer, strlen(buffer)>FILE_NAME_MAX_SIZE?FILE_NAME_MAX_SIZE:strlen(buffer));
-		printf("%s\n", file_name);
-		/* 打开文件，准备写入 */
-		FILE *fp = fopen(file_name, "w");
+		printf("receive from client :%s\n", file_name);
+		/* open the file */
+		//FILE *fp = fopen(file_name, "w");
+		FILE *fp = fopen("recv.img", "w");
 		if(NULL == fp)
 		{
 			printf("File:\t%s Can Not Open To Write\n", file_name); 
 			exit(1);
 		}
-
-		/* 从client接收数据，并写入文件 */
-		while(1)
+		/*接收文件信息*/
+		if(recvfrom(server_socket_fd, (char*)&file_inf, sizeof(file_inf), 0, 
+					(struct sockaddr*)&client_addr,&client_addr_length) < 0)
 		{
-			PackInfo pack_info;
-
+			perror("receive file information Failed:");
+			exit(1);
+		}
+		printf("******filesize:%d;maxID:%d******\n",file_inf.buf_size,file_inf.id);
+		/* receive from client and write */
+		while(id <= file_inf.id)
+		{
+			
 			if(recvfrom(server_socket_fd, (char*)&data, sizeof(data), 0, 
-					(struct sockaddr*)&client_addr,&client_addr_length) > 0)
+					(struct sockaddr*)&client_addr,&client_addr_length) < 0)
+			{
+				perror("receive file information Failed:");
+				exit(1);
+			}
+			else
 			{
 				if(data.head.id == id)
 				{
@@ -129,15 +137,21 @@ int main()
 						printf("Send confirm information failed!");
 					}
 				}
-
-			}
-			else
-			{
-				break;
 			}
 		}
+		/*得到接收文件长度*/
+		filesize=ftell(fp);		
+		printf("******receive filesize=%d******\n",filesize);
 		/* 关闭文件 */
 		fclose(fp);
+		/* 计算server端的md5 */
+		bzero(md5_sum,MD5_LEN+1);
+                if(!CalcFileMD5(file_name, md5_sum))
+       		{
+       			puts("Error occured!");
+      			//return 0;
+  		}
+  		printf("******the server MD5 sum is :%s ******\n", md5_sum);
 		/* 接收client端的文件md5值 */
 		bzero(buffer, BUFFER_SIZE);
 		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr, &client_addr_length) == -1)
@@ -145,37 +159,30 @@ int main()
 			perror("Receive md5 Data Failed:");
 			exit(1);
 		}
-		/* 从buffer中拷贝出md5 */
-		bzero(md5_sum,MD5_LEN+1);
-		strncpy(md5_sum, buffer, strlen(buffer)>MD5_LEN?MD5_LEN:strlen(buffer));
-		printf("the client md5 :%s\n", md5_sum);
-		/* 计算server端的md5 */
-		bzero(md5_sum,MD5_LEN+1);
-                if(!CalcFileMD5(file_name, md5_sum))
-       		{
-       			puts("Error occured!");
-      			return NULL;
-  		}
-  		printf("the server MD5 sum is :%s \n", md5_sum);
+		else
+		{
+			printf("******the client' md5 :%s******\n", md5_sum);
+		}		
 		/* 验证文件的正确性 */
 		if(strcmp(buffer,md5_sum) == 0)
        		{
-          		printf("*******the file has been modified*********\n"); 
-			printf("**File:%s Transfer Successful!**\n", file_name);
+          		printf("******the file has been modified******\n"); 
+			printf("******File:%s Transfer Successful!******\n", file_name);
+			/* 发送server端的文件md5值 */
+			bzero(buffer, BUFFER_SIZE);
+			strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));
+			if(sendto(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr,client_addr_length) < 0)
+			{
+				perror("Send server‘s md5_sum Failed:");
+				exit(1);
+			}
           		break;
        		}
  		else
 		{
 			printf("**File:%s Transfer Wrong!**\n", file_name);
 		}
-		/* 发送server端的文件md5值 */
-		bzero(buffer, BUFFER_SIZE);
-		strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));
-		if(sendto(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr,client_addr_length) < 0)
-		{
-			perror("Send server‘s md5_sum Failed:");
-			exit(1);
-		}
+
 			
 	}		
 	close(server_socket_fd);
