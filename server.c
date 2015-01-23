@@ -22,102 +22,63 @@
 #include<errno.h>
 #include<stdarg.h>
 #include<string.h>
+#include<time.h>
 #include "MD5.h"
 #include "packge.h"
 #include "socketwrapper.h"
-
+#include "file_translate.h"
 /*packge*/
-PackInfo pack_info;
 PackInfo file_inf;
-
+/*out_side*/
 int filesize = 0;
-int id = 1;
 char file_name[FILE_NAME_MAX_SIZE+1];
 char buffer[BUFFER_SIZE];
 char md5_sum[MD5_LEN + 1];
+/*client_addr*/
+struct sockaddr_in client_addr;
+socklen_t client_addr_length = sizeof(client_addr);
 /*main */
 int main()
 {
 	struct sockaddr_in server_addr;
 	int server_socket_fd = init_server(&server_addr);
-	/* translate file */
+	/* translate file info */
+	/* receive the file_name*/
+	bzero(buffer, BUFFER_SIZE);
+	if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,
+		(struct sockaddr*)&client_addr, &client_addr_length) == -1)
+	{
+		perror("Receive Data Failed:");
+		exit(1);
+	}
+	bzero(file_name,FILE_NAME_MAX_SIZE+1);
+	strncpy(file_name, buffer, strlen(buffer)>FILE_NAME_MAX_SIZE?FILE_NAME_MAX_SIZE:strlen(buffer));
+	printf("receive from client :%s\n", file_name);
+	/*receive other file information*/
+	if(recvfrom(server_socket_fd, (char*)&file_inf, sizeof(file_inf), 0, 
+					(struct sockaddr*)&client_addr,&client_addr_length) < 0)
+	{
+		perror("receive file information Failed:");
+		exit(1);
+	}
+	printf("******filesize:%d ; maxID:%d******\n",file_inf.buf_size,file_inf.id);
+	/* open the file */
+	FILE *fp = fopen("recv.img", "w");
+	if(NULL == fp)
+	{
+		printf("File:\t%s Can Not Open To Write\n", file_name); 
+		exit(1);
+	}
 	while(1)
-	{	
-		
-		struct sockaddr_in client_addr;
-		socklen_t client_addr_length = sizeof(client_addr);
-		/* file_name*/
-		bzero(buffer, BUFFER_SIZE);
-		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr, &client_addr_length) == -1)
-		{
-			perror("Receive Data Failed:");
-			exit(1);
-		}
-		bzero(file_name,FILE_NAME_MAX_SIZE+1);
-		strncpy(file_name, buffer, strlen(buffer)>FILE_NAME_MAX_SIZE?FILE_NAME_MAX_SIZE:strlen(buffer));
-		printf("receive from client :%s\n", file_name);
-		/* open the file */
-		//FILE *fp = fopen(file_name, "w");
-		FILE *fp = fopen("recv.img", "w");
-		if(NULL == fp)
-		{
-			printf("File:\t%s Can Not Open To Write\n", file_name); 
-			exit(1);
-		}
-
-		/*receive file information*/
-		if(recvfrom(server_socket_fd, (char*)&file_inf, sizeof(file_inf), 0, 
-					(struct sockaddr*)&client_addr,&client_addr_length) < 0)
-		{
-			perror("receive file information Failed:");
-			exit(1);
-		}
-		printf("******filesize:%d ; maxID:%d******\n",file_inf.buf_size,file_inf.id);
-
-		/* receive from client and write */
-		while(id <= file_inf.id)
-		{
-			
-			if(recvfrom(server_socket_fd, (char*)&data, sizeof(data), 0, 
-					(struct sockaddr*)&client_addr,&client_addr_length) < 0)
-			{
-				perror("receive file information Failed:");
-				exit(1);
-			}
-			else
-			{
-				if(data.head.id == id)
-				{
-					pack_info.id = data.head.id;
-					pack_info.buf_size = data.head.buf_size;
-					++id;
-					/* Send confirm information */
-					if(sendto(server_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, 
-						(struct sockaddr*)&client_addr, client_addr_length) < 0)
-					{
-						printf("Send confirm information failed!");
-					}
-					/* write file */
-					if(fwrite(data.buf, sizeof(char), data.head.buf_size, fp) < data.head.buf_size)
-					{
-						printf("File:\t%s Write Failed\n", file_name);
-						break;
-					}
-				}
-				/* re-send pack */
-				else if(data.head.id < id)  
-				{
-					pack_info.id = data.head.id;
-					pack_info.buf_size = data.head.buf_size;
-					/* re-send confirm information */
-					if(sendto(server_socket_fd, (char*)&pack_info, sizeof(pack_info), 0, 
-						(struct sockaddr*)&client_addr, client_addr_length) < 0)
-					{
-						printf("Send confirm information failed!");
-					}
-				}
-			}
-		}
+	{
+		/* time start */
+		time_t t_start,t_end;
+    		t_start=time(NULL);
+		/*file receive */
+		file_receive(server_socket_fd,client_addr,fp,file_inf.id);
+		/* time end */
+    		t_end=time(NULL);
+    		printf("******use time:%.0fs******\n",difftime(t_end,t_start));
 		/*get the size of file received*/
 		filesize=ftell(fp);		
 		printf("******receive filesize=%d******\n",filesize);
@@ -130,17 +91,18 @@ int main()
        			puts("Error occured!");
       			//return 0;
   		}
-  		printf("******the server MD5 sum is :%s ******\n", md5_sum);
+  		printf("******the server' MD5 sum is :%s ******\n", md5_sum);
 		/* receive the client'md5 */
 		bzero(buffer, BUFFER_SIZE);
-		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr, &client_addr_length) == -1)
+		if(recvfrom(server_socket_fd, buffer, BUFFER_SIZE,0,
+			(struct sockaddr*)&client_addr, &client_addr_length) == -1)
 		{
 			perror("Receive md5 Data Failed:");
 			exit(1);
 		}
 		else
 		{
-			printf("******the client' md5 :%s******\n", md5_sum);
+			printf("******the client' MD5 sum is :%s******\n", md5_sum);
 		}		
 		/* confirm the file */
 		if(strcmp(buffer,md5_sum) == 0)
@@ -150,9 +112,10 @@ int main()
 			/* send the server'md5 */
 			bzero(buffer, BUFFER_SIZE);
 			strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));
-			if(sendto(server_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&client_addr,client_addr_length) < 0)
+			if(sendto(server_socket_fd, buffer, BUFFER_SIZE,0,
+				(struct sockaddr*)&client_addr,client_addr_length) < 0)
 			{
-				perror("Send server‘s md5_sum Failed:");
+				perror("Send server' md5_sum Failed:");
 				exit(1);
 			}
           		break;
@@ -160,9 +123,7 @@ int main()
  		else
 		{
 			printf("**File:%s Transfer Wrong!**\n", file_name);
-		}
-
-			
+		}			
 	}		
 	close(server_socket_fd);
 	return 0;
