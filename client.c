@@ -22,11 +22,11 @@
 #include<netdb.h>
 #include<stdarg.h>
 #include<string.h>
-#include<time.h>
+
 #include "MD5.h"
 #include "packge.h"
 #include "socketwrapper.h"
-
+#include "file_translate.h"
 
 /*file informaton*/
 PackInfo file_inf;
@@ -35,16 +35,17 @@ char buffer[BUFFER_SIZE];
 char md5_sum[MD5_LEN + 1];
 /*id*/
 int filesize = 0;		
-int send_id = 0;
-int receive_id = 0;
+/*server_addr*/
+struct sockaddr_in server_addr;
+socklen_t server_addr_length = sizeof(server_addr);
+/*file_translate*/
+
 /*main*/
-void file_translate(int client_socket_fd,struct sockaddr_in server_addr);
 int main()
 {
-	struct sockaddr_in server_addr;
+	/*init socket*/
 	int client_socket_fd = init_client(&server_addr);
-	
-	socklen_t server_addr_length = sizeof(server_addr);
+		
 	/* input the file Path */	
 	bzero(file_name, FILE_NAME_MAX_SIZE+1);
 	printf("Please Input File Path to Server: ");
@@ -54,7 +55,8 @@ int main()
 	strncpy(buffer, file_name, strlen(file_name)>BUFFER_SIZE?BUFFER_SIZE:strlen(file_name));
 
 	/* send the file path  */
-	if(sendto(client_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&server_addr,server_addr_length) < 0)
+	if(sendto(client_socket_fd, buffer, BUFFER_SIZE,0,
+			(struct sockaddr*)&server_addr,server_addr_length) < 0)
 	{
 		perror("Send File Name Failed:");
 		exit(1);
@@ -68,7 +70,7 @@ int main()
 	filesize=ftell(fp);		
 	//printf("filesize=%d\n",filesize);
 	/*move the ptr back to the head */
-	rewind(fp); 			
+	rewind(fp); 
 
 	/*send the filesize and the id:file_inf*/
 	file_inf.buf_size = filesize;
@@ -80,116 +82,56 @@ int main()
 		perror("Send File information Failed:");
 		exit(1);
 	}
-
 	/*send the file*/
-	if(NULL == fp)
+
+
+	file_translate( client_socket_fd, server_addr,fp);
+
+	
+	/* close the file */			
+	fclose(fp);		
+
+	/* calc the file'md5 */
+       	if(!CalcFileMD5(file_name, md5_sum))
+      	{
+       		puts("Error occured!");
+      	}
+       	printf("******the md5 of the file %s is:\n******%s******\n",file_name,md5_sum);
+	/* send the file'md5 */
+	bzero(buffer, BUFFER_SIZE);
+	strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));	
+	if(sendto(client_socket_fd, buffer, BUFFER_SIZE,0,
+		(struct sockaddr*)&server_addr,server_addr_length) < 0)
 	{
-		printf("File:%s Not Found.\n", file_name);
+		perror("******Send File Name Failed:******");
+		exit(1);
+	}
+	/* receive the server'md5 */
+	bzero(buffer, BUFFER_SIZE);
+	if(recvfrom(client_socket_fd, buffer, BUFFER_SIZE,0,
+		(struct sockaddr*)&server_addr, &server_addr_length) == -1)
+	{
+		perror("Receive md5 Data Failed:");
+		exit(1);
 	}
 	else
 	{
-		int len = 0;
-		/* time start */
-		time_t t_start,t_end;
-    		t_start=time(NULL);
-		/* read the buf and send to the server */
-		while(1)
-		{
-			PackInfo pack_info;
-
-			if(receive_id == send_id)
-			{
-				++send_id;
-				if((len = fread(data.buf, sizeof(char), BUFFER_SIZE, fp)) > 0)
-				{
-					/* put the send_id in the head  */
-					data.head.id = send_id;  
-					/* bufsize */
-					data.head.buf_size = len;  
-					//printf("id=%d\n",send_id);
-					//printf("sendsize=%d\n",len);
-					if(sendto(client_socket_fd, (char*)&data, sizeof(data), 0, 
-						(struct sockaddr*)&server_addr, server_addr_length) < 0)
-					{
-						perror("Send File Failed:");
-						break;
-					}
-					/* receive confirm information */
-					recvfrom(client_socket_fd, (char*)&pack_info, sizeof(pack_info), 0,
-						 (struct sockaddr*)&server_addr, &server_addr_length);
-					receive_id = pack_info.id;	
-				}
-				else
-				{
-					break;
-				}
-			}
-			else
-			{
-				/* if id is dif  re-send  */
-				if(sendto(client_socket_fd, (char*)&data,sizeof(data),0,
-					(struct sockaddr*)&server_addr, server_addr_length) < 0)
-				{
-					perror("Send File Failed:");
-					break;
-				}
-
-				/* receive confirm information */
-				recvfrom(client_socket_fd, (char*)&pack_info, sizeof(pack_info), 0,
- 					(struct sockaddr*)&server_addr, &server_addr_length);
-				receive_id = pack_info.id;	
-			}
-		}
-		/* time end */
-    		t_end=time(NULL);
-    		printf("******use time:%.0fs******\n",difftime(t_end,t_start));
-		/* close the file */
-		fclose(fp);
-
-		/* calc the file'md5 */
-       		if(!CalcFileMD5(file_name, md5_sum))
-      		{
-       			puts("Error occured!");
-      		}
-       		printf("******the md5 of the file %s is:\n******%s******\n",file_name,md5_sum);
-		/* send the file'md5 */
-		bzero(buffer, BUFFER_SIZE);
-		strncpy(buffer, md5_sum, strlen(md5_sum)>BUFFER_SIZE?BUFFER_SIZE:strlen(md5_sum));	
-		if(sendto(client_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&server_addr,server_addr_length) < 0)
-		{
-			perror("******Send File Name Failed:******");
-			exit(1);
-		}
-		/* receive the server'md5 */
-		bzero(buffer, BUFFER_SIZE);
-		if(recvfrom(client_socket_fd, buffer, BUFFER_SIZE,0,(struct sockaddr*)&server_addr, &server_addr_length) == -1)
-		{
-			perror("Receive md5 Data Failed:");
-			exit(1);
-		}
-		else
-		{
-			printf("******server's md5: %s******\n", buffer);
-		}
-		
-       		/* confirm the md5 */
-       		if(strcmp(buffer,md5_sum) == 0)
-       		{
-          		printf("******the file has been modified******\n"); 
-			printf("******File:%s Transfer Successful!******\n", file_name);
-			exit(1);
-       		}
- 		else
-		{
-			printf("******File:%s Transfer Wrong!******\n", file_name);
-		}
-				
+		printf("******server's md5: \n******%s******\n", buffer);
 	}
-
-	close(client_socket_fd);
+		
+       	/* confirm the md5 */
+       	if(strcmp(buffer,md5_sum) == 0)
+       	{
+          	printf("******the file has been modified******\n"); 
+		printf("******File:%s Transfer Successful!******\n", file_name);
+		exit(1);
+       	}
+ 	else
+	{
+		printf("******File:%s Transfer Wrong!******\n", file_name);
+	}
+				
+	//close(client_socket_fd);
 	return 0;
 }
-void file_translate(int client_socket_fd,struct sockaddr_in server_addr)
-{
 
-}
